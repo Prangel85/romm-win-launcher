@@ -1,6 +1,7 @@
 """Client per le API RomM."""
 
 import requests
+from pathlib import Path
 from typing import Optional
 
 class RommClient:
@@ -15,3 +16,14 @@ class RommClient:
         resp.raise_for_status()
         data = resp.json()
         return data.get("items", data) if isinstance(data, dict) else data
+
+    def download_rom(self, rom_id: int, dest_path: Path) -> None:
+        """Scarica una ROM."""
+        # L'endpoint per scaricare il contenuto della ROM
+        resp = self.session.get(f"{self.base}/roms/{rom_id}/content", stream=True)
+        resp.raise_for_status()
+        dest_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(dest_path, "wb") as f:
+            for chunk in resp.iter_content(chunk_size=8192):
+                if chunk:
+                    f.write(chunk)
