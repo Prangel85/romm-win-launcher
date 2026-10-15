@@ -14,7 +14,6 @@ CONFIG_FILE = Path("config.json")
 LOG_FILE = Path("launcher.log")
 
 # Mappatura nomi piattaforma → codice Batocera
-# Fonte: https://wiki.batocera.org/systems
 PLATFORM_FOLDERS = {
     "game boy": "gb",
     "game boy color": "gbc",
@@ -55,6 +54,27 @@ PLATFORM_FOLDERS = {
     "neo-geo": "neogeo",
 }
 
+# Core RetroArch predefiniti (possono essere sovrascritti dall'utente)
+DEFAULT_CORES = {
+    "gb": "gambatte_libretro.dll",
+    "gbc": "gambatte_libretro.dll",
+    "gba": "mgba_libretro.dll",
+    "nes": "mesen_libretro.dll",
+    "snes": "snes9x_libretro.dll",
+    "n64": "mupen64plus_next_libretro.dll",
+    "gc": "dolphin_libretro.dll",
+    "wii": "dolphin_libretro.dll",
+    "nds": "melonds_libretro.dll",
+    "psx": "pcsx_rearmed_libretro.dll",
+    "ps2": "pcsx2_libretro.dll",
+    "psp": "ppsspp_libretro.dll",
+    "md": "genesis_plus_gx_libretro.dll",
+    "sms": "genesis_plus_gx_libretro.dll",
+    "gg": "genesis_plus_gx_libretro.dll",
+    "dc": "flycast_libretro.dll",
+    "arcade": "fbneo_libretro.dll",
+}
+
 def sanitize_name(name: str) -> str:
     """Rimuove i caratteri non validi nei nomi di cartella Windows."""
     return re.sub(r'[\\/:*?"<>|]', "-", name).strip()
@@ -71,8 +91,15 @@ class App(tk.Tk):
 
         self.setup_logging()
 
-        # --- Settings frame ---
-        settings = ttk.LabelFrame(self, text="Impostazioni")
+        # Notebook per le schede
+        self.notebook = ttk.Notebook(self)
+        self.notebook.pack(fill="both", expand=True, padx=10, pady=5)
+
+        # --- Scheda Impostazioni ---
+        settings_tab = ttk.Frame(self.notebook)
+        self.notebook.add(settings_tab, text="Impostazioni")
+
+        settings = ttk.LabelFrame(settings_tab, text="Connessione e percorsi")
         settings.pack(fill="x", padx=10, pady=5)
 
         ttk.Label(settings, text="URL RomM:").grid(row=0, column=0, sticky="w", padx=5, pady=2)
@@ -99,8 +126,32 @@ class App(tk.Tk):
 
         ttk.Button(settings, text="Salva impostazioni", command=self.save_settings).grid(row=5, column=1, sticky="e", padx=5, pady=5)
 
-        # --- ROM list ---
-        list_frame = ttk.LabelFrame(self, text="ROM")
+        # --- Scheda Core ---
+        cores_tab = ttk.Frame(self.notebook)
+        self.notebook.add(cores_tab, text="Core")
+
+        cores_frame = ttk.LabelFrame(cores_tab, text="Configurazione core RetroArch")
+        cores_frame.pack(fill="both", expand=True, padx=10, pady=5)
+
+        # Treeview per i core
+        self.cores_tree = ttk.Treeview(cores_frame, columns=("core",), show="headings", height=15)
+        self.cores_tree.heading("platform", text="Piattaforma")
+        self.cores_tree.heading("core", text="Core (.dll)")
+        self.cores_tree.column("platform", width=200)
+        self.cores_tree.column("core", width=300)
+        self.cores_tree.pack(fill="both", expand=True, padx=5, pady=5)
+
+        core_btn_frame = ttk.Frame(cores_frame)
+        core_btn_frame.pack(fill="x", padx=5, pady=5)
+        ttk.Button(core_btn_frame, text="Aggiungi / Modifica", command=self.edit_core).pack(side="left", padx=5)
+        ttk.Button(core_btn_frame, text="Rimuovi", command=self.remove_core).pack(side="left", padx=5)
+        ttk.Button(core_btn_frame, text="Carica predefiniti", command=self.load_default_cores).pack(side="left", padx=5)
+
+        # --- Scheda ROM ---
+        roms_tab = ttk.Frame(self.notebook)
+        self.notebook.add(roms_tab, text="ROM")
+
+        list_frame = ttk.LabelFrame(roms_tab, text="Libreria")
         list_frame.pack(fill="both", expand=True, padx=10, pady=5)
 
         self.tree = ttk.Treeview(list_frame, columns=("downloaded",), show="tree headings")
@@ -118,10 +169,11 @@ class App(tk.Tk):
 
         # --- Log ---
         log_frame = ttk.LabelFrame(self, text="Log")
-        log_frame.pack(fill="both", expand=False, padx=10, pady=5)
-        self.log_text = tk.Text(log_frame, height=8, state="disabled")
-        self.log_text.pack(fill="both", expand=True, padx=5, pady=5)
+        log_frame.pack(fill="x", padx=10, pady=5)
+        self.log_text = tk.Text(log_frame, height=6, state="disabled")
+        self.log_text.pack(fill="x", padx=5, pady=5)
 
+        self.load_cores_into_tree()
         self.log("Avvio applicazione.")
 
     def setup_logging(self):
@@ -179,8 +231,67 @@ class App(tk.Tk):
         self.config["retroarch_path"] = self.ra_var.get().strip()
         self.config["rom_path"] = self.rom_dir_var.get().strip()
         self.config["log_level"] = self.log_level_var.get()
+        # Salva anche i core
+        cores = {}
+        for item in self.cores_tree.get_children():
+            plat, core = self.cores_tree.item(item, "values")
+            cores[plat] = core
+        self.config["cores"] = cores
         CONFIG_FILE.write_text(json.dumps(self.config, indent=2), encoding="utf-8")
         self.log("Impostazioni salvate.")
+
+    def load_cores_into_tree(self):
+        self.cores_tree.delete(*self.cores_tree.get_children())
+        cores = self.config.get("cores", DEFAULT_CORES)
+        for plat, core in sorted(cores.items()):
+            self.cores_tree.insert("", "end", values=(plat, core))
+
+    def edit_core(self):
+        selection = self.cores_tree.selection()
+        plat = ""
+        core = ""
+        if selection:
+            plat, core = self.cores_tree.item(selection[0], "values")
+
+        dialog = tk.Toplevel(self)
+        dialog.title("Configura core")
+        dialog.geometry("400x150")
+        dialog.transient(self)
+        dialog.grab_set()
+
+        ttk.Label(dialog, text="Piattaforma (es. gba, snes, gc):").pack(pady=5)
+        plat_var = tk.StringVar(value=plat)
+        ttk.Entry(dialog, textvariable=plat_var, width=40).pack(pady=2)
+
+        ttk.Label(dialog, text="Core (.dll):").pack(pady=5)
+        core_var = tk.StringVar(value=core)
+        ttk.Entry(dialog, textvariable=core_var, width=40).pack(pady=2)
+
+        def save():
+            p = plat_var.get().strip().lower()
+            c = core_var.get().strip()
+            if not p or not c:
+                return
+            # Rimuovi eventuale voce esistente
+            for item in self.cores_tree.get_children():
+                if self.cores_tree.item(item, "values")[0] == p:
+                    self.cores_tree.delete(item)
+                    break
+            self.cores_tree.insert("", "end", values=(p, c))
+            dialog.destroy()
+
+        ttk.Button(dialog, text="Salva", command=save).pack(pady=10)
+
+    def remove_core(self):
+        selection = self.cores_tree.selection()
+        if selection:
+            self.cores_tree.delete(selection[0])
+
+    def load_default_cores(self):
+        if messagebox.askyesno("Conferma", "Sovrascrivere i core con quelli predefiniti?"):
+            self.cores_tree.delete(*self.cores_tree.get_children())
+            for plat, core in sorted(DEFAULT_CORES.items()):
+                self.cores_tree.insert("", "end", values=(plat, core))
 
     def get_client(self) -> RommClient | None:
         url = self.url_var.get().strip()
@@ -195,7 +306,6 @@ class App(tk.Tk):
         return PLATFORM_FOLDERS.get(key, key.replace(" ", "_"))
 
     def get_rom_folder(self, rom: dict) -> Path:
-        """Restituisce il percorso della sottocartella della ROM: sistema/(id) - nome"""
         rom_dir = self.rom_dir_var.get().strip()
         if not rom_dir:
             return Path()
@@ -251,7 +361,6 @@ class App(tk.Tk):
             self.log("Seleziona una ROM, non una piattaforma.", "warning")
             return
 
-        # Trova la ROM corrispondente
         plat_name = self.tree.item(parent, "text")
         rom_name = self.tree.item(item, "text")
         rom = next((r for r in self.roms if r.get("name") == rom_name and (r.get("platform_display_name") or r.get("platform_slug")) == plat_name), None)
@@ -276,7 +385,6 @@ class App(tk.Tk):
 
             client.download_rom(rom["id"], fs_name, dest)
             self.log(f"Download completato: {dest}")
-            # Aggiorna lo stato nella lista
             self.tree.item(item, values=("Sì",))
         except Exception as e:
             self.log(f"Errore download: {e}", "error")
