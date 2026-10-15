@@ -5,6 +5,7 @@ from tkinter import ttk, messagebox, filedialog
 import json
 import logging
 import re
+import subprocess
 from pathlib import Path
 from datetime import datetime
 
@@ -12,6 +13,7 @@ from romm_client import RommClient
 
 CONFIG_FILE = Path("config.json")
 LOG_FILE = Path("launcher.log")
+CORES_MAP_FILE = Path("libretro_cores.json")
 
 # Mappatura nomi piattaforma → codice Batocera
 PLATFORM_FOLDERS = {
@@ -54,6 +56,36 @@ PLATFORM_FOLDERS = {
     "neo-geo": "neogeo",
 }
 
+# Mappatura semplificata core → piattaforma (basata su docs.libretro.com)
+LIBRETRO_CORE_MAP = {
+    "gambatte": "gb",
+    "mgba": "gba",
+    "mesen": "nes",
+    "fceumm": "nes",
+    "nestopia": "nes",
+    "snes9x": "snes",
+    "bsnes": "snes",
+    "mupen64plus_next": "n64",
+    "parallel_n64": "n64",
+    "dolphin": "gc",
+    "melonds": "nds",
+    "desmume": "nds",
+    "pcsx_rearmed": "psx",
+    "beetle_psx": "psx",
+    "pcsx2": "ps2",
+    "ppsspp": "psp",
+    "genesis_plus_gx": "md",
+    "picodrive": "md",
+    "flycast": "dc",
+    "fbneo": "arcade",
+    "mame": "arcade",
+    "handy": "lynx",
+    "mednafen_pce": "pce",
+    "mednafen_saturn": "saturn",
+    "citra": "3ds",
+    "azahar": "3ds",
+}
+
 def sanitize_name(name: str) -> str:
     return re.sub(r'[\\/:*?"<>|]', "-", name).strip()
 
@@ -76,7 +108,6 @@ class App(tk.Tk):
         settings_tab = ttk.Frame(self.notebook)
         self.notebook.add(settings_tab, text="Impostazioni")
 
-        # Connessione e percorsi
         settings = ttk.LabelFrame(settings_tab, text="Connessione e percorsi")
         settings.pack(fill="x", padx=10, pady=5)
 
@@ -104,7 +135,7 @@ class App(tk.Tk):
 
         ttk.Button(settings, text="Salva impostazioni", command=self.save_settings).grid(row=5, column=1, sticky="e", padx=5, pady=5)
 
-        # Sezione Core (dentro Impostazioni)
+        # Sezione Core
         cores_frame = ttk.LabelFrame(settings_tab, text="Core RetroArch")
         cores_frame.pack(fill="both", expand=True, padx=10, pady=5)
 
@@ -138,7 +169,9 @@ class App(tk.Tk):
         btn_frame = ttk.Frame(list_frame)
         btn_frame.pack(fill="x", padx=5, pady=5)
         ttk.Button(btn_frame, text="Carica libreria", command=self.load_library).pack(side="left", padx=5)
-        ttk.Button(btn_frame, text="Scarica selezionata", command=self.download_selected).pack(side="left", padx=5)
+        ttk.Button(btn_frame, text="Scarica ROM", command=self.download_selected).pack(side="left", padx=5)
+        ttk.Button(btn_frame, text="Scarica media", command=self.download_media).pack(side="left", padx=5)
+        ttk.Button(btn_frame, text="Scarica tutto", command=self.download_all).pack(side="left", padx=5)
         ttk.Button(btn_frame, text="Avvia selezionata", command=self.launch_selected).pack(side="left", padx=5)
 
         # --- Log ---
@@ -219,6 +252,11 @@ class App(tk.Tk):
         for plat, core in sorted(cores.items()):
             self.cores_tree.insert("", "end", values=(plat, core))
 
+    def guess_platform_from_core(self, core_name: str) -> str:
+        """Prova a indovinare la piattaforma dal nome del core."""
+        key = core_name.replace("_libretro.dll", "").lower()
+        return LIBRETRO_CORE_MAP.get(key, key)
+
     def scan_retroarch_cores(self):
         ra_path = self.ra_var.get().strip()
         if not ra_path:
@@ -235,7 +273,6 @@ class App(tk.Tk):
             return
 
         self.log(f"Trovati {len(dlls)} core in {cores_dir}")
-        # Mostra un dialog per scegliere quali aggiungere
         self.show_cores_dialog(dlls)
 
     def show_cores_dialog(self, dlls):
@@ -253,8 +290,7 @@ class App(tk.Tk):
         def add_selected():
             selected = [listbox.get(i) for i in listbox.curselection()]
             for name in selected:
-                # Usa il nome del core come chiave temporanea
-                key = name.replace("_libretro.dll", "")
+                plat = self.guess_platform_from_core(name)
                 # Evita duplicati
                 exists = False
                 for item in self.cores_tree.get_children():
@@ -262,7 +298,7 @@ class App(tk.Tk):
                         exists = True
                         break
                 if not exists:
-                    self.cores_tree.insert("", "end", values=(key, name))
+                    self.cores_tree.insert("", "end", values=(plat, name))
             dialog.destroy()
             self.log(f"Aggiunti {len(selected)} core.")
 
@@ -339,6 +375,24 @@ class App(tk.Tk):
         dest = rom_folder / fs_name
         return "Sì" if dest.exists() else "No"
 
+    def get_selected_rom(self):
+        selection = self.tree.selection()
+        if not selection:
+            self.log("Nessuna ROM selezionata.", "warning")
+            return None
+        item = selection[0]
+        parent = self.tree.parent(item)
+        if not parent:
+            self.log("Seleziona una ROM, non una piattaforma.", "warning")
+            return None
+        plat_name = self.tree.item(parent, "text")
+        rom_name = self.tree.item(item, "text")
+        rom = next((r for r in self.roms if r.get("name") == rom_name and (r.get("platform_display_name") or r.get("platform_slug")) == plat_name), None)
+        if not rom:
+            self.log("ROM non trovata.", "error")
+            return None
+        return rom, item
+
     def load_library(self):
         self.log("Caricamento libreria da RomM...")
         client = self.get_client()
@@ -365,47 +419,86 @@ class App(tk.Tk):
                 self.tree.insert(parent, "end", text=rom.get("name", ""), values=(downloaded,))
 
     def download_selected(self):
-        selection = self.tree.selection()
-        if not selection:
-            self.log("Nessuna ROM selezionata.", "warning")
+        result = self.get_selected_rom()
+        if not result:
             return
-
-        item = selection[0]
-        parent = self.tree.parent(item)
-        if not parent:
-            self.log("Seleziona una ROM, non una piattaforma.", "warning")
-            return
-
-        plat_name = self.tree.item(parent, "text")
-        rom_name = self.tree.item(item, "text")
-        rom = next((r for r in self.roms if r.get("name") == rom_name and (r.get("platform_display_name") or r.get("platform_slug")) == plat_name), None)
-        if not rom:
-            self.log("ROM non trovata.", "error")
-            return
-
-        self.log(f"Download di '{rom_name}'...")
+        rom, item = result
+        self.log(f"Download ROM di '{rom.get('name')}'...")
         client = self.get_client()
         if not client:
             return
-
         try:
             rom_folder = self.get_rom_folder(rom)
-            if not rom_folder:
-                self.log("Cartella ROM non impostata.", "error")
-                return
             rom_folder.mkdir(parents=True, exist_ok=True)
-
-            fs_name = rom.get("fs_name") or rom_name + ".rom"
+            fs_name = rom.get("fs_name") or rom.get("name", "") + ".rom"
             dest = rom_folder / fs_name
-
             client.download_rom(rom["id"], fs_name, dest)
             self.log(f"Download completato: {dest}")
             self.tree.item(item, values=("Sì",))
         except Exception as e:
             self.log(f"Errore download: {e}", "error")
 
+    def download_media(self):
+        result = self.get_selected_rom()
+        if not result:
+            return
+        rom, item = result
+        if self.is_rom_downloaded(rom) != "Sì":
+            self.log("Scarica prima la ROM.", "warning")
+            return
+        self.log(f"Download media per '{rom.get('name')}'... (da implementare)")
+
+    def download_all(self):
+        result = self.get_selected_rom()
+        if not result:
+            return
+        rom, item = result
+        self.log(f"Download completo di '{rom.get('name')}'...")
+        self.download_selected()
+        self.download_media()
+
     def launch_selected(self):
-        self.log("Avvio gioco... (da implementare)")
+        result = self.get_selected_rom()
+        if not result:
+            return
+        rom, item = result
+        if self.is_rom_downloaded(rom) != "Sì":
+            self.log("La ROM non è stata scaricata.", "warning")
+            return
+
+        ra_path = self.ra_var.get().strip()
+        if not ra_path:
+            self.log("Cartella RetroArch non impostata.", "error")
+            return
+
+        plat_code = self.get_platform_folder(rom.get("platform_display_name") or "")
+        cores = self.config.get("cores", {})
+        core_dll = cores.get(plat_code)
+        if not core_dll:
+            self.log(f"Nessun core configurato per '{plat_code}'.", "error")
+            return
+
+        rom_folder = self.get_rom_folder(rom)
+        fs_name = rom.get("fs_name") or rom.get("name", "") + ".rom"
+        rom_file = rom_folder / fs_name
+
+        retroarch_exe = Path(ra_path) / "retroarch.exe"
+        if not retroarch_exe.exists():
+            self.log(f"retroarch.exe non trovato in {ra_path}", "error")
+            return
+
+        core_path = Path(ra_path) / "cores" / core_dll
+        if not core_path.exists():
+            self.log(f"Core non trovato: {core_path}", "error")
+            return
+
+        cmd = [str(retroarch_exe), "-L", str(core_path), str(rom_file)]
+        self.log(f"Avvio: {' '.join(cmd)}")
+        try:
+            subprocess.Popen(cmd)
+            self.log("Gioco avviato.")
+        except Exception as e:
+            self.log(f"Errore avvio: {e}", "error")
 
 if __name__ == "__main__":
     app = App()
