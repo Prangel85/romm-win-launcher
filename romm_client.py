@@ -19,10 +19,23 @@ class RommClient:
         return data.get("items", data) if isinstance(data, dict) else data
 
     def download_rom(self, rom_id: int, filename: str, dest_path: Path) -> None:
-        """Scarica una ROM usando l'endpoint corretto /roms/{id}/content/{filename}."""
-        # Il filename va URL-encoded
+        """Scarica una ROM."""
         safe_name = quote(filename, safe="")
         url = f"{self.base}/roms/{rom_id}/content/{safe_name}"
+        resp = self.session.get(url, stream=True)
+        resp.raise_for_status()
+        dest_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(dest_path, "wb") as f:
+            for chunk in resp.iter_content(chunk_size=8192):
+                if chunk:
+                    f.write(chunk)
+
+    def download_file(self, url: str, dest_path: Path) -> None:
+        """Scarica un file generico (cover, manuale, ecc.)."""
+        # Se l'URL è relativo, lo rende assoluto
+        if url.startswith("/"):
+            base = self.base.replace("/api", "")
+            url = base + url
         resp = self.session.get(url, stream=True)
         resp.raise_for_status()
         dest_path.parent.mkdir(parents=True, exist_ok=True)
