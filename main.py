@@ -4,6 +4,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 import json
 import logging
+import re
 from pathlib import Path
 from datetime import datetime
 
@@ -12,18 +13,22 @@ from romm_client import RommClient
 CONFIG_FILE = Path("config.json")
 LOG_FILE = Path("launcher.log")
 
-# Mappatura nomi piattaforma → cartella stile Batocera/RomM
+# Mappatura nomi piattaforma → codice Batocera
+# Fonte: https://wiki.batocera.org/systems
 PLATFORM_FOLDERS = {
     "game boy": "gb",
     "game boy color": "gbc",
     "game boy advance": "gba",
     "nes": "nes",
     "famicom": "nes",
+    "nintendo entertainment system": "nes",
     "super nintendo": "snes",
     "snes": "snes",
+    "super famicom": "snes",
     "nintendo 64": "n64",
     "n64": "n64",
     "gamecube": "gc",
+    "nintendo gamecube": "gc",
     "wii": "wii",
     "nintendo ds": "nds",
     "nds": "nds",
@@ -37,12 +42,22 @@ PLATFORM_FOLDERS = {
     "psp": "psp",
     "sega genesis": "md",
     "mega drive": "md",
+    "genesis": "md",
     "sega master system": "sms",
+    "master system": "sms",
     "game gear": "gg",
     "dreamcast": "dc",
     "arcade": "arcade",
     "mame": "arcade",
+    "atari 2600": "atari2600",
+    "atari 7800": "atari7800",
+    "neo geo": "neogeo",
+    "neo-geo": "neogeo",
 }
+
+def sanitize_name(name: str) -> str:
+    """Rimuove i caratteri non validi nei nomi di cartella Windows."""
+    return re.sub(r'[\\/:*?"<>|]', "-", name).strip()
 
 class App(tk.Tk):
     def __init__(self):
@@ -187,7 +202,7 @@ class App(tk.Tk):
         plat_name = rom.get("platform_display_name") or rom.get("platform_slug") or "unknown"
         folder = self.get_platform_folder(plat_name)
         rom_id = rom.get("id", "0")
-        rom_name = rom.get("name", "unknown").replace("/", "-").replace("\\", "-")
+        rom_name = sanitize_name(rom.get("name", "unknown"))
         rom_folder_name = f"{rom_id} - {rom_name}"
         return Path(rom_dir) / folder / rom_folder_name
 
