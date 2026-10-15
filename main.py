@@ -179,14 +179,24 @@ class App(tk.Tk):
         key = platform_name.lower().strip()
         return PLATFORM_FOLDERS.get(key, key.replace(" ", "_"))
 
-    def is_rom_downloaded(self, rom: dict) -> str:
+    def get_rom_folder(self, rom: dict) -> Path:
+        """Restituisce il percorso della sottocartella della ROM: sistema/(id) - nome"""
         rom_dir = self.rom_dir_var.get().strip()
         if not rom_dir:
-            return "?"
+            return Path()
         plat_name = rom.get("platform_display_name") or rom.get("platform_slug") or "unknown"
         folder = self.get_platform_folder(plat_name)
+        rom_id = rom.get("id", "0")
+        rom_name = rom.get("name", "unknown").replace("/", "-").replace("\\", "-")
+        rom_folder_name = f"{rom_id} - {rom_name}"
+        return Path(rom_dir) / folder / rom_folder_name
+
+    def is_rom_downloaded(self, rom: dict) -> str:
+        rom_folder = self.get_rom_folder(rom)
+        if not rom_folder or not rom_folder.exists():
+            return "No"
         fs_name = rom.get("fs_name") or rom.get("name", "") + ".rom"
-        dest = Path(rom_dir) / folder / fs_name
+        dest = rom_folder / fs_name
         return "Sì" if dest.exists() else "No"
 
     def load_library(self):
@@ -240,18 +250,15 @@ class App(tk.Tk):
             return
 
         try:
-            rom_dir = self.rom_dir_var.get().strip()
-            if not rom_dir:
+            rom_folder = self.get_rom_folder(rom)
+            if not rom_folder:
                 self.log("Cartella ROM non impostata.", "error")
                 return
-            folder = self.get_platform_folder(plat_name)
-            dest_dir = Path(rom_dir) / folder
-            dest_dir.mkdir(parents=True, exist_ok=True)
+            rom_folder.mkdir(parents=True, exist_ok=True)
 
             fs_name = rom.get("fs_name") or rom_name + ".rom"
-            dest = dest_dir / fs_name
+            dest = rom_folder / fs_name
 
-            # Passa il filename all'endpoint corretto
             client.download_rom(rom["id"], fs_name, dest)
             self.log(f"Download completato: {dest}")
             # Aggiorna lo stato nella lista
