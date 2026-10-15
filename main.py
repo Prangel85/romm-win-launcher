@@ -55,7 +55,7 @@ PLATFORM_FOLDERS = {
     "neo-geo": "neogeo",
 }
 
-# Mappatura semplificata core → piattaforma (basata su docs.libretro.com)
+# Mappatura semplificata core → piattaforma
 LIBRETRO_CORE_MAP = {
     "gambatte": "gb",
     "mgba": "gba",
@@ -93,7 +93,7 @@ class App(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("RomM Win Launcher")
-        self.geometry("1000x700")
+        self.geometry("1100x750")
 
         self.config = self.load_config()
         self.client = None
@@ -139,7 +139,7 @@ class App(tk.Tk):
         cores_frame = ttk.LabelFrame(settings_tab, text="Core RetroArch")
         cores_frame.pack(fill="both", expand=True, padx=10, pady=5)
 
-        self.cores_tree = ttk.Treeview(cores_frame, columns=("platform", "core"), show="headings", height=10)
+        self.cores_tree = ttk.Treeview(cores_frame, columns=("platform", "core"), show="headings", height=8)
         self.cores_tree.heading("platform", text="Piattaforma")
         self.cores_tree.heading("core", text="Core")
         self.cores_tree.column("platform", width=200)
@@ -174,10 +174,36 @@ class App(tk.Tk):
         ttk.Button(btn_frame, text="Scarica tutto", command=self.download_all).pack(side="left", padx=5)
         ttk.Button(btn_frame, text="Avvia selezionata", command=self.launch_selected).pack(side="left", padx=5)
 
+        # --- Scheda Save e States ---
+        saves_tab = ttk.Frame(self.notebook)
+        self.notebook.add(saves_tab, text="Save e States")
+
+        saves_frame = ttk.LabelFrame(saves_tab, text="Salvataggi e Stati")
+        saves_frame.pack(fill="both", expand=True, padx=10, pady=5)
+
+        self.saves_tree = ttk.Treeview(saves_frame, columns=("type", "date", "source"), show="tree headings")
+        self.saves_tree.heading("#0", text="Piattaforma / Gioco / File")
+        self.saves_tree.heading("type", text="Tipo")
+        self.saves_tree.heading("date", text="Data")
+        self.saves_tree.heading("source", text="Origine")
+        self.saves_tree.column("#0", width=450)
+        self.saves_tree.column("type", width=80, anchor="center")
+        self.saves_tree.column("date", width=150)
+        self.saves_tree.column("source", width=80, anchor="center")
+        self.saves_tree.pack(fill="both", expand=True, padx=5, pady=5)
+
+        saves_btn_frame = ttk.Frame(saves_frame)
+        saves_btn_frame.pack(fill="x", padx=5, pady=5)
+        ttk.Button(saves_btn_frame, text="Leggi da Cloud", command=self.read_cloud_saves).pack(side="left", padx=5)
+        ttk.Button(saves_btn_frame, text="Leggi locale", command=self.read_local_saves).pack(side="left", padx=5)
+        ttk.Button(saves_btn_frame, text="Scarica mancanti", command=self.download_missing_saves).pack(side="left", padx=5)
+        ttk.Button(saves_btn_frame, text="Carica mancanti", command=self.upload_missing_saves).pack(side="left", padx=5)
+        ttk.Button(saves_btn_frame, text="Sincronizza", command=self.sync_saves).pack(side="left", padx=5)
+
         # --- Log ---
         log_frame = ttk.LabelFrame(self, text="Log")
         log_frame.pack(fill="x", padx=10, pady=5)
-        self.log_text = tk.Text(log_frame, height=6, state="disabled")
+        self.log_text = tk.Text(log_frame, height=5, state="disabled")
         self.log_text.pack(fill="x", padx=5, pady=5)
 
         self.load_cores_into_tree()
@@ -253,19 +279,12 @@ class App(tk.Tk):
             self.cores_tree.insert("", "end", values=(plat, core))
 
     def guess_platform_from_core(self, core_name: str) -> str:
-        """Prova a indovinare la piattaforma dal nome del core (matching flessibile)."""
         key = core_name.replace("_libretro.dll", "").lower()
-
-        # Matching esatto
         if key in LIBRETRO_CORE_MAP:
             return LIBRETRO_CORE_MAP[key]
-
-        # Matching parziale (es. bsnes2014_balanced → snes, desmume2015 → nds)
         for core_key, plat in LIBRETRO_CORE_MAP.items():
             if core_key in key or key.startswith(core_key):
                 return plat
-
-        # Fallback: usa il nome del core
         return key
 
     def scan_retroarch_cores(self):
@@ -277,12 +296,10 @@ class App(tk.Tk):
         if not cores_dir.exists():
             self.log(f"Cartella cores non trovata: {cores_dir}", "error")
             return
-
         dlls = list(cores_dir.glob("*_libretro.dll"))
         if not dlls:
             self.log("Nessun core trovato.", "warning")
             return
-
         self.log(f"Trovati {len(dlls)} core in {cores_dir}")
         self.show_cores_dialog(dlls)
 
@@ -292,17 +309,14 @@ class App(tk.Tk):
         dialog.geometry("500x400")
         dialog.transient(self)
         dialog.grab_set()
-
         listbox = tk.Listbox(dialog, selectmode="multiple")
         listbox.pack(fill="both", expand=True, padx=10, pady=10)
         for dll in sorted(dlls):
             listbox.insert("end", dll.name)
-
         def add_selected():
             selected = [listbox.get(i) for i in listbox.curselection()]
             for name in selected:
                 plat = self.guess_platform_from_core(name)
-                # Evita duplicati
                 exists = False
                 for item in self.cores_tree.get_children():
                     if self.cores_tree.item(item, "values")[1] == name:
@@ -312,7 +326,6 @@ class App(tk.Tk):
                     self.cores_tree.insert("", "end", values=(plat, name))
             dialog.destroy()
             self.log(f"Aggiunti {len(selected)} core.")
-
         ttk.Button(dialog, text="Aggiungi selezionati", command=add_selected).pack(pady=5)
 
     def edit_core(self):
@@ -321,21 +334,17 @@ class App(tk.Tk):
         core = ""
         if selection:
             plat, core = self.cores_tree.item(selection[0], "values")
-
         dialog = tk.Toplevel(self)
         dialog.title("Configura core")
         dialog.geometry("400x150")
         dialog.transient(self)
         dialog.grab_set()
-
         ttk.Label(dialog, text="Piattaforma (es. gba, snes, gc):").pack(pady=5)
         plat_var = tk.StringVar(value=plat)
         ttk.Entry(dialog, textvariable=plat_var, width=40).pack(pady=2)
-
         ttk.Label(dialog, text="Core (.dll):").pack(pady=5)
         core_var = tk.StringVar(value=core)
         ttk.Entry(dialog, textvariable=core_var, width=40).pack(pady=2)
-
         def save():
             p = plat_var.get().strip().lower()
             c = core_var.get().strip()
@@ -347,7 +356,6 @@ class App(tk.Tk):
                     break
             self.cores_tree.insert("", "end", values=(p, c))
             dialog.destroy()
-
         ttk.Button(dialog, text="Salva", command=save).pack(pady=10)
 
     def remove_core(self):
@@ -422,7 +430,6 @@ class App(tk.Tk):
         for rom in self.roms:
             plat = rom.get("platform_display_name") or rom.get("platform_slug") or "Sconosciuto"
             by_platform.setdefault(plat, []).append(rom)
-
         for plat, roms in sorted(by_platform.items()):
             parent = self.tree.insert("", "end", text=plat, open=False)
             for rom in sorted(roms, key=lambda r: r.get("name", "")):
@@ -457,7 +464,29 @@ class App(tk.Tk):
         if self.is_rom_downloaded(rom) != "Sì":
             self.log("Scarica prima la ROM.", "warning")
             return
-        self.log(f"Download media per '{rom.get('name')}'... (da implementare)")
+        self.log(f"Download media per '{rom.get('name')}'...")
+        client = self.get_client()
+        if not client:
+            return
+        try:
+            rom_folder = self.get_rom_folder(rom)
+            # Cover
+            if rom.get("url_cover"):
+                cover_path = rom_folder / "cover.jpg"
+                client.download_file(rom["url_cover"], cover_path)
+                self.log(f"Cover scaricata: {cover_path.name}")
+            # Manuale
+            if rom.get("has_manual") and rom.get("url_manual"):
+                manual_path = rom_folder / "manual.pdf"
+                client.download_file(rom["url_manual"], manual_path)
+                self.log(f"Manuale scaricato: {manual_path.name}")
+            # Metadati (salvati come JSON)
+            meta_path = rom_folder / "metadata.json"
+            meta_path.write_text(json.dumps(rom, indent=2, ensure_ascii=False), encoding="utf-8")
+            self.log(f"Metadati salvati: {meta_path.name}")
+            self.log("Media scaricati.")
+        except Exception as e:
+            self.log(f"Errore download media: {e}", "error")
 
     def download_all(self):
         result = self.get_selected_rom()
@@ -476,38 +505,30 @@ class App(tk.Tk):
         if self.is_rom_downloaded(rom) != "Sì":
             self.log("La ROM non è stata scaricata.", "warning")
             return
-
         ra_path = self.ra_var.get().strip()
         if not ra_path:
             self.log("Cartella RetroArch non impostata.", "error")
             return
-
         plat_code = self.get_platform_folder(rom.get("platform_display_name") or "")
-        # Cerca il core nella configurazione corrente (non solo da config.json)
         cores = {}
         for item in self.cores_tree.get_children():
             p, c = self.cores_tree.item(item, "values")
             cores[p] = c
-
         core_dll = cores.get(plat_code)
         if not core_dll:
             self.log(f"Nessun core configurato per '{plat_code}'.", "error")
             return
-
         rom_folder = self.get_rom_folder(rom)
         fs_name = rom.get("fs_name") or rom.get("name", "") + ".rom"
         rom_file = rom_folder / fs_name
-
         retroarch_exe = Path(ra_path) / "retroarch.exe"
         if not retroarch_exe.exists():
             self.log(f"retroarch.exe non trovato in {ra_path}", "error")
             return
-
         core_path = Path(ra_path) / "cores" / core_dll
         if not core_path.exists():
             self.log(f"Core non trovato: {core_path}", "error")
             return
-
         cmd = [str(retroarch_exe), "-L", str(core_path), str(rom_file)]
         self.log(f"Avvio: {' '.join(cmd)}")
         try:
@@ -515,6 +536,22 @@ class App(tk.Tk):
             self.log("Gioco avviato.")
         except Exception as e:
             self.log(f"Errore avvio: {e}", "error")
+
+    # --- Metodi Save e States (scheletro) ---
+    def read_cloud_saves(self):
+        self.log("Lettura salvataggi da Cloud... (da implementare)")
+
+    def read_local_saves(self):
+        self.log("Lettura salvataggi locali... (da implementare)")
+
+    def download_missing_saves(self):
+        self.log("Download salvataggi mancanti... (da implementare)")
+
+    def upload_missing_saves(self):
+        self.log("Upload salvataggi mancanti... (da implementare)")
+
+    def sync_saves(self):
+        self.log("Sincronizzazione salvataggi... (da implementare)")
 
 if __name__ == "__main__":
     app = App()
