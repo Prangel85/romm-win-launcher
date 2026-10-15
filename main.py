@@ -56,13 +56,13 @@ class App(tk.Tk):
         list_frame = ttk.LabelFrame(self, text="ROM")
         list_frame.pack(fill="both", expand=True, padx=10, pady=5)
 
-        self.tree = ttk.Treeview(list_frame, columns=("platform", "name"), show="tree headings")
+        self.tree = ttk.Treeview(list_frame, columns=("name", "downloaded"), show="tree headings")
         self.tree.heading("#0", text="Sistema")
-        self.tree.heading("platform", text="Piattaforma")
         self.tree.heading("name", text="Nome")
+        self.tree.heading("downloaded", text="Scaricato?")
         self.tree.column("#0", width=200)
-        self.tree.column("platform", width=150)
-        self.tree.column("name", width=400)
+        self.tree.column("name", width=500)
+        self.tree.column("downloaded", width=100, anchor="center")
         self.tree.pack(fill="both", expand=True, padx=5, pady=5)
 
         btn_frame = ttk.Frame(list_frame)
@@ -149,6 +149,14 @@ class App(tk.Tk):
             return None
         return RommClient(url, token)
 
+    def is_rom_downloaded(self, rom: dict) -> str:
+        """Controlla se la ROM è già presente nella cartella ROM locale."""
+        rom_dir = self.rom_dir_var.get().strip()
+        if not rom_dir:
+            return "?"
+        # TODO: implementare il controllo reale del file
+        return "No"
+
     def load_library(self):
         self.log("Caricamento libreria da RomM...")
         client = self.get_client()
@@ -171,7 +179,8 @@ class App(tk.Tk):
         for plat, roms in sorted(by_platform.items()):
             parent = self.tree.insert("", "end", text=plat, open=False)
             for rom in sorted(roms, key=lambda r: r.get("name", "")):
-                self.tree.insert(parent, "end", text="", values=(plat, rom.get("name", "")))
+                downloaded = self.is_rom_downloaded(rom)
+                self.tree.insert(parent, "end", text="", values=(rom.get("name", ""), downloaded))
 
     def download_selected(self):
         self.log("Download ROM... (da implementare)")
