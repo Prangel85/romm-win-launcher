@@ -470,17 +470,14 @@ class App(tk.Tk):
             return
         try:
             rom_folder = self.get_rom_folder(rom)
-            # Cover
             if rom.get("url_cover"):
                 cover_path = rom_folder / "cover.jpg"
                 client.download_file(rom["url_cover"], cover_path)
                 self.log(f"Cover scaricata: {cover_path.name}")
-            # Manuale
             if rom.get("has_manual") and rom.get("url_manual"):
                 manual_path = rom_folder / "manual.pdf"
                 client.download_file(rom["url_manual"], manual_path)
                 self.log(f"Manuale scaricato: {manual_path.name}")
-            # Metadati (salvati come JSON)
             meta_path = rom_folder / "metadata.json"
             meta_path.write_text(json.dumps(rom, indent=2, ensure_ascii=False), encoding="utf-8")
             self.log(f"Metadati salvati: {meta_path.name}")
@@ -537,21 +534,87 @@ class App(tk.Tk):
         except Exception as e:
             self.log(f"Errore avvio: {e}", "error")
 
-    # --- Metodi Save e States (scheletro) ---
+    # --- Metodi Save e States ---
+    def _get_rom_by_id(self, rom_id):
+        return next((r for r in self.roms if r.get("id") == rom_id), None)
+
     def read_cloud_saves(self):
-        self.log("Lettura salvataggi da Cloud... (da implementare)")
+        self.log("Lettura salvataggi da Cloud...")
+        client = self.get_client()
+        if not client:
+            return
+        if not self.roms:
+            self.load_library()
+        try:
+            saves = client.get_saves()
+            states = client.get_states()
+            self.log(f"Trovati {len(saves)} save e {len(states)} state su RomM.")
+            self.populate_saves_tree(saves, states, source="Cloud")
+        except Exception as e:
+            self.log(f"Errore lettura cloud: {e}", "error")
 
     def read_local_saves(self):
-        self.log("Lettura salvataggi locali... (da implementare)")
+        self.log("Lettura salvataggi locali...")
+        ra_path = self.ra_var.get().strip()
+        if not ra_path:
+            self.log("Cartella RetroArch non impostata.", "error")
+            return
+        saves_dir = Path(ra_path) / "saves"
+        states_dir = Path(ra_path) / "states"
+        local_items = []
+        if saves_dir.exists():
+            for f in saves_dir.rglob("*"):
+                if f.is_file() and f.suffix.lower() in (".srm", ".sav", ".gci", ".eep", ".fla"):
+                    local_items.append({"file": f, "type": "Save", "mtime": datetime.fromtimestamp(f.stat().st_mtime)})
+        if states_dir.exists():
+            for f in states_dir.rglob("*"):
+                if f.is_file() and ".state" in f.name.lower():
+                    local_items.append({"file": f, "type": "State", "mtime": datetime.fromtimestamp(f.stat().st_mtime)})
+        self.log(f"Trovati {len(local_items)} file locali.")
+        self.populate_local_saves_tree(local_items)
+
+    def populate_saves_tree(self, saves, states, source="Cloud"):
+        self.saves_tree.delete(*self.saves_tree.get_children())
+        by_rom = {}
+        for s in saves:
+            rom_id = s.get("rom_id")
+            by_rom.setdefault(rom_id, {"saves": [], "states": []})
+            by_rom[rom_id]["saves"].append(s)
+        for st in states:
+            rom_id = st.get("rom_id")
+            by_rom.setdefault(rom_id, {"saves": [], "states": []})
+            by_rom[rom_id]["states"].append(st)
+
+        for rom_id, data in by_rom.items():
+            rom = self._get_rom_by_id(rom_id)
+            rom_name = rom.get("name", f"ROM {rom_id}") if rom else f"ROM {rom_id}"
+            plat = rom.get("platform_display_name", "Sconosciuto") if rom else "Sconosciuto"
+            parent = self.saves_tree.insert("", "end", text=f"{plat} / {rom_name}", open=False)
+            for s in data["saves"]:
+                fname = s.get("file_name") or s.get("name") or "save"
+                date = (s.get("updated_at") or s.get("created_at") or "")[:16].replace("T", " ")
+                self.saves_tree.insert(parent, "end", text=fname, values=("Save", date, source))
+            for st in data["states"]:
+                fname = st.get("file_name") or st.get("name") or "state"
+                date = (st.get("updated_at") or st.get("created_at") or "")[:16].replace("T", " ")
+                self.saves_tree.insert(parent, "end", text=fname, values=("State", date, source))
+
+    def populate_local_saves_tree(self, items):
+        self.saves_tree.delete(*self.saves_tree.get_children())
+        parent = self.saves_tree.insert("", "end", text="Locale", open=True)
+        for item in items:
+            date = item["mtime"].strftime("%Y-%m-%d %H:%M")
+            self.saves_tree.insert(parent, "end", text=item["file"].name, values=(item["type"], date, "Locale"))
 
     def download_missing_saves(self):
-        self.log("Download salvataggi mancanti... (da implementare)")
+        self.log("Download salvataggi mancanti (base)")
 
     def upload_missing_saves(self):
-        self.log("Upload salvataggi mancanti... (da implementare)")
+        self.log("Upload salvataggi mancanti (base)")
 
     def sync_saves(self):
-        self.log("Sincronizzazione salvataggi... (da implementare)")
+        self.log("Sincronizzazione: confronta Cloud e Locale...")
+        self.read_cloud_saves()
 
 if __name__ == "__main__":
     app = App()
