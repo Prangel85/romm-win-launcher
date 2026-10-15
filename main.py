@@ -54,27 +54,6 @@ PLATFORM_FOLDERS = {
     "neo-geo": "neogeo",
 }
 
-# Core RetroArch predefiniti
-DEFAULT_CORES = {
-    "gb": "gambatte_libretro.dll",
-    "gbc": "gambatte_libretro.dll",
-    "gba": "mgba_libretro.dll",
-    "nes": "mesen_libretro.dll",
-    "snes": "snes9x_libretro.dll",
-    "n64": "mupen64plus_next_libretro.dll",
-    "gc": "dolphin_libretro.dll",
-    "wii": "dolphin_libretro.dll",
-    "nds": "melonds_libretro.dll",
-    "psx": "pcsx_rearmed_libretro.dll",
-    "ps2": "pcsx2_libretro.dll",
-    "psp": "ppsspp_libretro.dll",
-    "md": "genesis_plus_gx_libretro.dll",
-    "sms": "genesis_plus_gx_libretro.dll",
-    "gg": "genesis_plus_gx_libretro.dll",
-    "dc": "flycast_libretro.dll",
-    "arcade": "fbneo_libretro.dll",
-}
-
 def sanitize_name(name: str) -> str:
     return re.sub(r'[\\/:*?"<>|]', "-", name).strip()
 
@@ -97,6 +76,7 @@ class App(tk.Tk):
         settings_tab = ttk.Frame(self.notebook)
         self.notebook.add(settings_tab, text="Impostazioni")
 
+        # Connessione e percorsi
         settings = ttk.LabelFrame(settings_tab, text="Connessione e percorsi")
         settings.pack(fill="x", padx=10, pady=5)
 
@@ -124,25 +104,22 @@ class App(tk.Tk):
 
         ttk.Button(settings, text="Salva impostazioni", command=self.save_settings).grid(row=5, column=1, sticky="e", padx=5, pady=5)
 
-        # --- Scheda Core ---
-        cores_tab = ttk.Frame(self.notebook)
-        self.notebook.add(cores_tab, text="Core")
-
-        cores_frame = ttk.LabelFrame(cores_tab, text="Configurazione core RetroArch")
+        # Sezione Core (dentro Impostazioni)
+        cores_frame = ttk.LabelFrame(settings_tab, text="Core RetroArch")
         cores_frame.pack(fill="both", expand=True, padx=10, pady=5)
 
-        self.cores_tree = ttk.Treeview(cores_frame, columns=("platform", "core"), show="headings", height=15)
+        self.cores_tree = ttk.Treeview(cores_frame, columns=("platform", "core"), show="headings", height=10)
         self.cores_tree.heading("platform", text="Piattaforma")
-        self.cores_tree.heading("core", text="Core (.dll)")
+        self.cores_tree.heading("core", text="Core")
         self.cores_tree.column("platform", width=200)
-        self.cores_tree.column("core", width=300)
+        self.cores_tree.column("core", width=350)
         self.cores_tree.pack(fill="both", expand=True, padx=5, pady=5)
 
         core_btn_frame = ttk.Frame(cores_frame)
         core_btn_frame.pack(fill="x", padx=5, pady=5)
         ttk.Button(core_btn_frame, text="Aggiungi / Modifica", command=self.edit_core).pack(side="left", padx=5)
         ttk.Button(core_btn_frame, text="Rimuovi", command=self.remove_core).pack(side="left", padx=5)
-        ttk.Button(core_btn_frame, text="Carica predefiniti", command=self.load_default_cores).pack(side="left", padx=5)
+        ttk.Button(core_btn_frame, text="Scansiona core RetroArch", command=self.scan_retroarch_cores).pack(side="left", padx=5)
 
         # --- Scheda ROM ---
         roms_tab = ttk.Frame(self.notebook)
@@ -238,9 +215,58 @@ class App(tk.Tk):
 
     def load_cores_into_tree(self):
         self.cores_tree.delete(*self.cores_tree.get_children())
-        cores = self.config.get("cores", DEFAULT_CORES)
+        cores = self.config.get("cores", {})
         for plat, core in sorted(cores.items()):
             self.cores_tree.insert("", "end", values=(plat, core))
+
+    def scan_retroarch_cores(self):
+        ra_path = self.ra_var.get().strip()
+        if not ra_path:
+            self.log("Cartella RetroArch non impostata.", "error")
+            return
+        cores_dir = Path(ra_path) / "cores"
+        if not cores_dir.exists():
+            self.log(f"Cartella cores non trovata: {cores_dir}", "error")
+            return
+
+        dlls = list(cores_dir.glob("*_libretro.dll"))
+        if not dlls:
+            self.log("Nessun core trovato.", "warning")
+            return
+
+        self.log(f"Trovati {len(dlls)} core in {cores_dir}")
+        # Mostra un dialog per scegliere quali aggiungere
+        self.show_cores_dialog(dlls)
+
+    def show_cores_dialog(self, dlls):
+        dialog = tk.Toplevel(self)
+        dialog.title("Core trovati")
+        dialog.geometry("500x400")
+        dialog.transient(self)
+        dialog.grab_set()
+
+        listbox = tk.Listbox(dialog, selectmode="multiple")
+        listbox.pack(fill="both", expand=True, padx=10, pady=10)
+        for dll in sorted(dlls):
+            listbox.insert("end", dll.name)
+
+        def add_selected():
+            selected = [listbox.get(i) for i in listbox.curselection()]
+            for name in selected:
+                # Usa il nome del core come chiave temporanea
+                key = name.replace("_libretro.dll", "")
+                # Evita duplicati
+                exists = False
+                for item in self.cores_tree.get_children():
+                    if self.cores_tree.item(item, "values")[1] == name:
+                        exists = True
+                        break
+                if not exists:
+                    self.cores_tree.insert("", "end", values=(key, name))
+            dialog.destroy()
+            self.log(f"Aggiunti {len(selected)} core.")
+
+        ttk.Button(dialog, text="Aggiungi selezionati", command=add_selected).pack(pady=5)
 
     def edit_core(self):
         selection = self.cores_tree.selection()
@@ -281,12 +307,6 @@ class App(tk.Tk):
         selection = self.cores_tree.selection()
         if selection:
             self.cores_tree.delete(selection[0])
-
-    def load_default_cores(self):
-        if messagebox.askyesno("Conferma", "Sovrascrivere i core con quelli predefiniti?"):
-            self.cores_tree.delete(*self.cores_tree.get_children())
-            for plat, core in sorted(DEFAULT_CORES.items()):
-                self.cores_tree.insert("", "end", values=(plat, core))
 
     def get_client(self) -> RommClient | None:
         url = self.url_var.get().strip()
