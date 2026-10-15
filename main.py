@@ -1,40 +1,69 @@
-"""RomM Win Launcher - Minimal skeleton."""
+"""RomM Win Launcher - Minimal version."""
 
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 import json
+import logging
 from pathlib import Path
+from datetime import datetime
+
+from romm_client import RommClient
 
 CONFIG_FILE = Path("config.json")
+LOG_FILE = Path("launcher.log")
 
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("RomM Win Launcher")
-        self.geometry("900x600")
+        self.geometry("1000x700")
 
         self.config = self.load_config()
+        self.client = None
+        self.roms = []
+
+        self.setup_logging()
 
         # --- Settings frame ---
-        settings = ttk.LabelFrame(self, text="Connessione RomM")
+        settings = ttk.LabelFrame(self, text="Impostazioni")
         settings.pack(fill="x", padx=10, pady=5)
 
         ttk.Label(settings, text="URL RomM:").grid(row=0, column=0, sticky="w", padx=5, pady=2)
         self.url_var = tk.StringVar(value=self.config.get("url", ""))
-        ttk.Entry(settings, textvariable=self.url_var, width=50).grid(row=0, column=1, padx=5, pady=2)
+        ttk.Entry(settings, textvariable=self.url_var, width=45).grid(row=0, column=1, padx=5, pady=2)
 
         ttk.Label(settings, text="Client API Token:").grid(row=1, column=0, sticky="w", padx=5, pady=2)
         self.token_var = tk.StringVar(value=self.config.get("token", ""))
-        ttk.Entry(settings, textvariable=self.token_var, width=50, show="*").grid(row=1, column=1, padx=5, pady=2)
+        ttk.Entry(settings, textvariable=self.token_var, width=45, show="*").grid(row=1, column=1, padx=5, pady=2)
 
-        ttk.Button(settings, text="Salva impostazioni", command=self.save_settings).grid(row=2, column=1, sticky="e", padx=5, pady=5)
+        ttk.Label(settings, text="Cartella RetroArch:").grid(row=2, column=0, sticky="w", padx=5, pady=2)
+        self.ra_var = tk.StringVar(value=self.config.get("retroarch_path", ""))
+        ttk.Entry(settings, textvariable=self.ra_var, width=45).grid(row=2, column=1, padx=5, pady=2)
+        ttk.Button(settings, text="Sfoglia...", command=lambda: self.browse_folder(self.ra_var)).grid(row=2, column=2, padx=5)
+
+        ttk.Label(settings, text="Cartella ROM:").grid(row=3, column=0, sticky="w", padx=5, pady=2)
+        self.rom_dir_var = tk.StringVar(value=self.config.get("rom_path", ""))
+        ttk.Entry(settings, textvariable=self.rom_dir_var, width=45).grid(row=3, column=1, padx=5, pady=2)
+        ttk.Button(settings, text="Sfoglia...", command=lambda: self.browse_folder(self.rom_dir_var)).grid(row=3, column=2, padx=5)
+
+        ttk.Label(settings, text="Log su file:").grid(row=4, column=0, sticky="w", padx=5, pady=2)
+        self.log_level_var = tk.StringVar(value=self.config.get("log_level", "No"))
+        ttk.Combobox(settings, textvariable=self.log_level_var, values=["No", "Info", "Debug", "Errori"], state="readonly", width=15).grid(row=4, column=1, sticky="w", padx=5, pady=2)
+
+        ttk.Button(settings, text="Salva impostazioni", command=self.save_settings).grid(row=5, column=1, sticky="e", padx=5, pady=5)
 
         # --- ROM list ---
         list_frame = ttk.LabelFrame(self, text="ROM")
         list_frame.pack(fill="both", expand=True, padx=10, pady=5)
 
-        self.rom_list = tk.Listbox(list_frame)
-        self.rom_list.pack(fill="both", expand=True, padx=5, pady=5)
+        self.tree = ttk.Treeview(list_frame, columns=("platform", "name"), show="tree headings")
+        self.tree.heading("#0", text="Sistema")
+        self.tree.heading("platform", text="Piattaforma")
+        self.tree.heading("name", text="Nome")
+        self.tree.column("#0", width=200)
+        self.tree.column("platform", width=150)
+        self.tree.column("name", width=400)
+        self.tree.pack(fill="both", expand=True, padx=5, pady=5)
 
         btn_frame = ttk.Frame(list_frame)
         btn_frame.pack(fill="x", padx=5, pady=5)
@@ -48,11 +77,55 @@ class App(tk.Tk):
         self.log_text = tk.Text(log_frame, height=8, state="disabled")
         self.log_text.pack(fill="both", expand=True, padx=5, pady=5)
 
-    def log(self, msg: str):
-        self.log_text.configure(state="normal")
-        self.log_text.insert("end", msg + "\n")
-        self.log_text.see("end")
-        self.log_text.configure(state="disabled")
+        self.log("Avvio applicazione.")
+
+    def setup_logging(self):
+        """Svuota e ricrea il file di log all'avvio."""
+        if LOG_FILE.exists():
+            LOG_FILE.unlink()
+        logging.basicConfig(
+            level=logging.DEBUG,
+            format="%(asctime)s [%(levelname)s] %(message)s",
+            handlers=[
+                logging.FileHandler(LOG_FILE, encoding="utf-8"),
+                logging.StreamHandler()
+            ]
+        )
+        self.logger = logging.getLogger("launcher")
+
+    def browse_folder(self, var: tk.StringVar):
+        path = filedialog.askdirectory()
+        if path:
+            var.set(path)
+
+    def log(self, msg: str, level: str = "info"):
+        """Scrive nel log visibile e nel file secondo il livello impostato."""
+        level = level.lower()
+        setting = self.log_level_var.get().lower()
+
+        # Sempre nel widget (livello info o superiore)
+        if level in ("info", "warning", "error"):
+            self.log_text.configure(state="normal")
+            self.log_text.insert("end", f"{datetime.now():%H:%M:%S} {msg}\n")
+            self.log_text.see("end")
+            self.log_text.configure(state="disabled")
+
+        # Su file secondo il livello scelto
+        if setting == "no":
+            return
+        if setting == "errori" and level != "error":
+            return
+        if setting == "info" and level == "debug":
+            return
+
+        if level == "debug":
+            self.logger.debug(msg)
+        elif level == "info":
+            self.logger.info(msg)
+        elif level == "warning":
+            self.logger.warning(msg)
+        elif level == "error":
+            self.logger.error(msg)
 
     def load_config(self) -> dict:
         if CONFIG_FILE.exists():
@@ -62,11 +135,43 @@ class App(tk.Tk):
     def save_settings(self):
         self.config["url"] = self.url_var.get().strip()
         self.config["token"] = self.token_var.get().strip()
+        self.config["retroarch_path"] = self.ra_var.get().strip()
+        self.config["rom_path"] = self.rom_dir_var.get().strip()
+        self.config["log_level"] = self.log_level_var.get()
         CONFIG_FILE.write_text(json.dumps(self.config, indent=2), encoding="utf-8")
         self.log("Impostazioni salvate.")
 
+    def get_client(self) -> RommClient | None:
+        url = self.url_var.get().strip()
+        token = self.token_var.get().strip()
+        if not url or not token:
+            self.log("URL o token mancanti.", "error")
+            return None
+        return RommClient(url, token)
+
     def load_library(self):
-        self.log("Caricamento libreria... (da implementare)")
+        self.log("Caricamento libreria da RomM...")
+        client = self.get_client()
+        if not client:
+            return
+        try:
+            self.roms = client.get_roms()
+            self.populate_tree()
+            self.log(f"Caricati {len(self.roms)} ROM.")
+        except Exception as e:
+            self.log(f"Errore caricamento libreria: {e}", "error")
+
+    def populate_tree(self):
+        self.tree.delete(*self.tree.get_children())
+        by_platform = {}
+        for rom in self.roms:
+            plat = rom.get("platform_display_name") or rom.get("platform_slug") or "Sconosciuto"
+            by_platform.setdefault(plat, []).append(rom)
+
+        for plat, roms in sorted(by_platform.items()):
+            parent = self.tree.insert("", "end", text=plat, open=False)
+            for rom in sorted(roms, key=lambda r: r.get("name", "")):
+                self.tree.insert(parent, "end", text="", values=(plat, rom.get("name", "")))
 
     def download_selected(self):
         self.log("Download ROM... (da implementare)")
