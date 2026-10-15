@@ -12,6 +12,38 @@ from romm_client import RommClient
 CONFIG_FILE = Path("config.json")
 LOG_FILE = Path("launcher.log")
 
+# Mappatura nomi piattaforma → cartella stile Batocera/RomM
+PLATFORM_FOLDERS = {
+    "game boy": "gb",
+    "game boy color": "gbc",
+    "game boy advance": "gba",
+    "nes": "nes",
+    "famicom": "nes",
+    "super nintendo": "snes",
+    "snes": "snes",
+    "nintendo 64": "n64",
+    "n64": "n64",
+    "gamecube": "gc",
+    "wii": "wii",
+    "nintendo ds": "nds",
+    "nds": "nds",
+    "nintendo 3ds": "3ds",
+    "playstation": "psx",
+    "ps1": "psx",
+    "psx": "psx",
+    "playstation 2": "ps2",
+    "ps2": "ps2",
+    "playstation portable": "psp",
+    "psp": "psp",
+    "sega genesis": "md",
+    "mega drive": "md",
+    "sega master system": "sms",
+    "game gear": "gg",
+    "dreamcast": "dc",
+    "arcade": "arcade",
+    "mame": "arcade",
+}
+
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
@@ -56,12 +88,10 @@ class App(tk.Tk):
         list_frame = ttk.LabelFrame(self, text="ROM")
         list_frame.pack(fill="both", expand=True, padx=10, pady=5)
 
-        self.tree = ttk.Treeview(list_frame, columns=("name", "downloaded"), show="tree headings")
-        self.tree.heading("#0", text="Sistema")
-        self.tree.heading("name", text="Nome")
+        self.tree = ttk.Treeview(list_frame, columns=("downloaded",), show="tree headings")
+        self.tree.heading("#0", text="Sistema / Nome")
         self.tree.heading("downloaded", text="Scaricato?")
-        self.tree.column("#0", width=200)
-        self.tree.column("name", width=500)
+        self.tree.column("#0", width=600)
         self.tree.column("downloaded", width=100, anchor="center")
         self.tree.pack(fill="both", expand=True, padx=5, pady=5)
 
@@ -80,7 +110,6 @@ class App(tk.Tk):
         self.log("Avvio applicazione.")
 
     def setup_logging(self):
-        """Svuota e ricrea il file di log all'avvio."""
         if LOG_FILE.exists():
             LOG_FILE.unlink()
         logging.basicConfig(
@@ -99,18 +128,15 @@ class App(tk.Tk):
             var.set(path)
 
     def log(self, msg: str, level: str = "info"):
-        """Scrive nel log visibile e nel file secondo il livello impostato."""
         level = level.lower()
         setting = self.log_level_var.get().lower()
 
-        # Sempre nel widget (livello info o superiore)
         if level in ("info", "warning", "error"):
             self.log_text.configure(state="normal")
             self.log_text.insert("end", f"{datetime.now():%H:%M:%S} {msg}\n")
             self.log_text.see("end")
             self.log_text.configure(state="disabled")
 
-        # Su file secondo il livello scelto
         if setting == "no":
             return
         if setting == "errori" and level != "error":
@@ -149,13 +175,19 @@ class App(tk.Tk):
             return None
         return RommClient(url, token)
 
+    def get_platform_folder(self, platform_name: str) -> str:
+        key = platform_name.lower().strip()
+        return PLATFORM_FOLDERS.get(key, key.replace(" ", "_"))
+
     def is_rom_downloaded(self, rom: dict) -> str:
-        """Controlla se la ROM è già presente nella cartella ROM locale."""
         rom_dir = self.rom_dir_var.get().strip()
         if not rom_dir:
             return "?"
-        # TODO: implementare il controllo reale del file
-        return "No"
+        plat_name = rom.get("platform_display_name") or rom.get("platform_slug") or "unknown"
+        folder = self.get_platform_folder(plat_name)
+        fs_name = rom.get("fs_name") or rom.get("name", "") + ".rom"
+        dest = Path(rom_dir) / folder / fs_name
+        return "Sì" if dest.exists() else "No"
 
     def load_library(self):
         self.log("Caricamento libreria da RomM...")
@@ -180,10 +212,51 @@ class App(tk.Tk):
             parent = self.tree.insert("", "end", text=plat, open=False)
             for rom in sorted(roms, key=lambda r: r.get("name", "")):
                 downloaded = self.is_rom_downloaded(rom)
-                self.tree.insert(parent, "end", text="", values=(rom.get("name", ""), downloaded))
+                self.tree.insert(parent, "end", text=rom.get("name", ""), values=(downloaded,))
 
     def download_selected(self):
-        self.log("Download ROM... (da implementare)")
+        selection = self.tree.selection()
+        if not selection:
+            self.log("Nessuna ROM selezionata.", "warning")
+            return
+
+        item = selection[0]
+        parent = self.tree.parent(item)
+        if not parent:
+            self.log("Seleziona una ROM, non una piattaforma.", "warning")
+            return
+
+        # Trova la ROM corrispondente
+        plat_name = self.tree.item(parent, "text")
+        rom_name = self.tree.item(item, "text")
+        rom = next((r for r in self.roms if r.get("name") == rom_name and (r.get("platform_display_name") or r.get("platform_slug")) == plat_name), None)
+        if not rom:
+            self.log("ROM non trovata.", "error")
+            return
+
+        self.log(f"Download di '{rom_name}'...")
+        client = self.get_client()
+        if not client:
+            return
+
+        try:
+            rom_dir = self.rom_dir_var.get().strip()
+            if not rom_dir:
+                self.log("Cartella ROM non impostata.", "error")
+                return
+            folder = self.get_platform_folder(plat_name)
+            dest_dir = Path(rom_dir) / folder
+            dest_dir.mkdir(parents=True, exist_ok=True)
+
+            fs_name = rom.get("fs_name") or rom_name + ".rom"
+            dest = dest_dir / fs_name
+
+            client.download_rom(rom["id"], dest)
+            self.log(f"Download completato: {dest}")
+            # Aggiorna lo stato nella lista
+            self.tree.item(item, values=("Sì",))
+        except Exception as e:
+            self.log(f"Errore download: {e}", "error")
 
     def launch_selected(self):
         self.log("Avvio gioco... (da implementare)")
