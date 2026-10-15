@@ -251,7 +251,8 @@ class App(tk.Tk):
             fs_name = rom.get("fs_name") or rom_name + ".rom"
             dest = dest_dir / fs_name
 
-            client.download_rom(rom["id"], dest)
+            # Passa il filename all'endpoint corretto
+            client.download_rom(rom["id"], fs_name, dest)
             self.log(f"Download completato: {dest}")
             # Aggiorna lo stato nella lista
             self.tree.item(item, values=("Sì",))
