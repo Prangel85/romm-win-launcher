@@ -190,6 +190,7 @@ class App(tk.Tk):
         self.saves_tree.column("type", width=70, anchor="center")
         self.saves_tree.column("locale", width=140)
         self.saves_tree.column("cloud", width=140)
+        self.saves_tree.pack(fill="both", expand=True, padx=5, pady=5)
 
         saves_btn_frame = ttk.Frame(saves_frame)
         saves_btn_frame.pack(fill="x", padx=5, pady=5)
@@ -532,79 +533,114 @@ class App(tk.Tk):
         except Exception as e:
             self.log(f"Errore avvio: {e}", "error")
 
-    # --- Metodi Save e States ---
+# --- Metodi Save e States ---
     def _get_rom_by_id(self, rom_id):
         return next((r for r in self.roms if r.get("id") == rom_id), None)
 
     def read_all_saves(self):
-    self.log("Lettura salvataggi Cloud e Locale...")
-    if not self.roms:
-        self.load_library()
-    client = self.get_client()
-    cloud_saves, cloud_states = [], []
-    if client:
-        try:
-            cloud_saves = client.get_saves()
-            cloud_states = client.get_states()
-            self.log(f"Cloud: {len(cloud_saves)} save, {len(cloud_states)} state")
-        except Exception as e:
-            self.log(f"Errore cloud: {e}", "error")
+        self.log("Lettura salvataggi Cloud e Locale...")
+        if not self.roms:
+            self.load_library()
+        client = self.get_client()
+        cloud_saves, cloud_states = [], []
+        if client:
+            try:
+                cloud_saves = client.get_saves()
+                cloud_states = client.get_states()
+                self.log(f"Cloud: {len(cloud_saves)} save, {len(cloud_states)} state")
+            except Exception as e:
+                self.log(f"Errore cloud: {e}", "error")
 
-    local_items = []
-    ra_path = self.ra_var.get().strip()
-    if ra_path:
-        saves_dir = Path(ra_path) / "saves"
-        states_dir = Path(ra_path) / "states"
-        if saves_dir.exists():
-            for f in saves_dir.rglob("*"):
-                if f.is_file() and f.suffix.lower() in (".srm", ".sav", ".gci", ".eep", ".fla"):
-                    local_items.append({"name": f.name, "type": "Save", "mtime": datetime.fromtimestamp(f.stat().st_mtime)})
-        if states_dir.exists():
-            for f in states_dir.rglob("*"):
-                if f.is_file() and ".state" in f.name.lower():
-                    local_items.append({"name": f.name, "type": "State", "mtime": datetime.fromtimestamp(f.stat().st_mtime)})
-        self.log(f"Locale: {len(local_items)} file")
+        local_items = []
+        ra_path = self.ra_var.get().strip()
+        if ra_path:
+            saves_dir = Path(ra_path) / "saves"
+            states_dir = Path(ra_path) / "states"
+            if saves_dir.exists():
+                for f in saves_dir.rglob("*"):
+                    if f.is_file() and f.suffix.lower() in (".srm", ".sav", ".gci", ".eep", ".fla"):
+                        local_items.append({"name": f.name, "type": "Save", "mtime": datetime.fromtimestamp(f.stat().st_mtime)})
+            if states_dir.exists():
+                for f in states_dir.rglob("*"):
+                    if f.is_file() and ".state" in f.name.lower():
+                        local_items.append({"name": f.name, "type": "State", "mtime": datetime.fromtimestamp(f.stat().st_mtime)})
+            self.log(f"Locale: {len(local_items)} file")
 
-    self.populate_combined_tree(cloud_saves, cloud_states, local_items)
+        self.populate_combined_tree(cloud_saves, cloud_states, local_items)
 
-def populate_combined_tree(self, cloud_saves, cloud_states, local_items):
-    self.saves_tree.delete(*self.saves_tree.get_children())
-    by_rom = {}
-    for s in cloud_saves:
-        rid = s.get("rom_id")
-        by_rom.setdefault(rid, {"saves": [], "states": [], "local": []})
-        by_rom[rid]["saves"].append(s)
-    for st in cloud_states:
-        rid = st.get("rom_id")
-        by_rom.setdefault(rid, {"saves": [], "states": [], "local": []})
-        by_rom[rid]["states"].append(st)
+    def populate_combined_tree(self, cloud_saves, cloud_states, local_items):
+        self.saves_tree.delete(*self.saves_tree.get_children())
+        
+        # Dizionario cloud per nome normalizzato
+        cloud_by_name = {}
+        for s in cloud_saves:
+            fname = s.get("file_name") or s.get("name") or ""
+            norm = self._normalize_filename(fname)
+            cloud_by_name[norm] = {"type": "Save", "data": s, "rom_id": s.get("rom_id")}
+        for st in cloud_states:
+            fname = st.get("file_name") or st.get("name") or ""
+            norm = self._normalize_filename(fname)
+            cloud_by_name[norm] = {"type": "State", "data": st, "rom_id": st.get("rom_id")}
 
-    if local_items:
-        by_rom["__local__"] = {"saves": [], "states": [], "local": local_items}
+        # Raggruppa per piattaforma e poi per ROM
+        by_platform = {}
+        for norm, info in cloud_by_name.items():
+            rid = info["rom_id"]
+            rom = self._get_rom_by_id(rid)
+            plat = rom.get("platform_display_name", "Sconosciuto") if rom else "Sconosciuto"
+            by_platform.setdefault(plat, {})
+            by_platform[plat].setdefault(rid, {"files": [], "local": []})
+            by_platform[plat][rid]["files"].append(info)
 
-    for rid, data in by_rom.items():
-        if rid == "__local__":
-            parent = self.saves_tree.insert("", "end", text="Locale", open=True)
-            for item in data["local"]:
+        # Associa i file locali
+        unmatched = []
+        for item in local_items:
+            norm = self._normalize_filename(item["name"])
+            if norm in cloud_by_name:
+                rid = cloud_by_name[norm]["rom_id"]
+                rom = self._get_rom_by_id(rid)
+                plat = rom.get("platform_display_name", "Sconosciuto") if rom else "Sconosciuto"
+                by_platform.setdefault(plat, {})
+                by_platform[plat].setdefault(rid, {"files": [], "local": []})
+                by_platform[plat][rid]["local"].append(item)
+            else:
+                unmatched.append(item)
+
+        # Popola l'albero
+        for plat, roms in sorted(by_platform.items()):
+            parent = self.saves_tree.insert("", "end", text=plat, open=False)
+            for rid, data in roms.items():
+                rom = self._get_rom_by_id(rid)
+                rom_name = rom.get("name", f"ROM {rid}") if rom else f"ROM {rid}"
+                game = self.saves_tree.insert(parent, "end", text=rom_name, open=False)
+                # Cloud
+                for info in data["files"]:
+                    fname = info["data"].get("file_name") or info["data"].get("name") or ""
+                    date = (info["data"].get("updated_at") or info["data"].get("created_at") or "")[:16].replace("T", " ")
+                    self.saves_tree.insert(game, "end", text=fname, values=(info["type"], "", date))
+                # Locale
+                for item in data["local"]:
+                    date = item["mtime"].strftime("%Y-%m-%d %H:%M")
+                    self.saves_tree.insert(game, "end", text=item["name"], values=(item["type"], date, ""))
+
+        # Non associati
+        if unmatched:
+            parent = self.saves_tree.insert("", "end", text="Non associati", open=False)
+            for item in unmatched:
                 date = item["mtime"].strftime("%Y-%m-%d %H:%M")
-                self.saves_tree.insert(parent, "end", text=item["name"], values=(item["type"], date, ""))
-            continue
+                self.saves_tree.insert(parent, "end", text=item["name"], values=(item["type"], date, ""))A
 
-        rom = self._get_rom_by_id(rid)
-        rom_name = rom.get("name", f"ROM {rid}") if rom else f"ROM {rid}"
-        plat = rom.get("platform_display_name", "Sconosciuto") if rom else "Sconosciuto"
-        parent = self.saves_tree.insert("", "end", text=plat, open=False)
-        game = self.saves_tree.insert(parent, "end", text=rom_name, open=False)
-        for s in data["saves"]:
-            fname = s.get("file_name") or s.get("name") or "save"
-            date = (s.get("updated_at") or s.get("created_at") or "")[:16].replace("T", " ")
-            self.saves_tree.insert(game, "end", text=fname, values=("Save", "", date))
-        for st in data["states"]:
-            fname = st.get("file_name") or st.get("name") or "state"
-            date = (st.get("updated_at") or st.get("created_at") or "")[:16].replace("T", " ")
-            self.saves_tree.insert(game, "end", text=fname, values=("State", "", date))
+    def _normalize_filename(self, name: str) -> str:
+        """Rimuove timestamp e estensioni per il matching."""
+        import re
+        # Rimuove qualsiasi cosa tra parentesi quadre (timestamp)
+        name = re.sub(r'\[[^\]]*\]', '', name)
+        # Rimuove estensioni comuni
+        for ext in [".srm", ".sav", ".state", ".auto", ".png", ".gci", ".state.auto", ".state.png"]:
+            while name.lower().endswith(ext):
+                name = name[:-len(ext)]
+        return name.strip().lower()
 
-    
     def download_missing_saves(self):
         self.log("Download salvataggi mancanti (base)")
 
@@ -613,7 +649,7 @@ def populate_combined_tree(self, cloud_saves, cloud_states, local_items):
 
     def sync_saves(self):
         self.log("Sincronizzazione: confronta Cloud e Locale...")
-        self.read_cloud_saves()
+        self.read_all_saves()
 
 if __name__ == "__main__":
     app = App()
